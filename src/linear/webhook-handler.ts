@@ -219,11 +219,17 @@ async function processClaudeRequest(issueId: string, commentId: string, requestI
 
     // Post result comment
     logger.info(`[${requestId}] Posting result comment to Linear...`);
-    if (result.success && result.prUrl) {
-      logger.info(`[${requestId}] SUCCESS - PR created: ${result.prUrl}`);
+    if (result.success) {
+      logger.info(`[${requestId}] SUCCESS`, {
+        hasPrUrl: !!result.prUrl,
+        summary: result.summary,
+      });
 
-      let comment = `✅ **Implementation Complete!**\n\n`;
-      comment += `**Pull Request:** ${result.prUrl}\n\n`;
+      let comment = `✅ **Task Complete!**\n\n`;
+
+      if (result.prUrl) {
+        comment += `**Pull Request:** ${result.prUrl}\n\n`;
+      }
 
       if (result.summary) {
         comment += `**Summary:**\n${result.summary}\n\n`;
@@ -260,7 +266,7 @@ async function processClaudeRequest(issueId: string, commentId: string, requestI
         summary: result.summary,
       });
 
-      let comment = `❌ **Implementation Failed**\n\n`;
+      let comment = `❌ **Task Failed**\n\n`;
 
       if (result.error) {
         comment += `**Error:** ${result.error}\n\n`;
