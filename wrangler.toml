@@ -1,0 +1,28 @@
+# =============================================================================
+# Cloudflare Workers / Containers Configuration
+# =============================================================================
+# Note: Cloudflare Containers require additional setup.
+# This config is for Workers with container support.
+# =============================================================================
+
+name = "linear-claude-webhook"
+main = "dist/index.js"
+compatibility_date = "2025-01-01"
+
+[vars]
+PORT = "3000"
+HOST = "0.0.0.0"
+COMPUTE_PROVIDER = "cloudflare"
+
+# For containers (when available in your account)
+# [containers]
+#   image = "your-registry/linear-claude-webhook:latest"
+#   memory = "1024MB"
+#   cpu = 1
+
+# Secrets should be set via: wrangler secret put SECRET_NAME
+# Required secrets:
+# - LINEAR_API_KEY
+# - LINEAR_WEBHOOK_SECRET
+# - GITHUB_TOKEN
+# - ANTHROPIC_API_KEY
