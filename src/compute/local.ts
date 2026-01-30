@@ -128,7 +128,7 @@ export class LocalComputeProvider implements ComputeProvider {
       const proc = spawn('claude', args, {
         cwd: workDir,
         env: claudeEnv,
-        stdio: ['pipe', 'pipe', 'pipe'],
+        stdio: ['ignore', 'pipe', 'pipe'],  // stdin must be ignored or claude hangs
       });
 
       let stdout = '';
