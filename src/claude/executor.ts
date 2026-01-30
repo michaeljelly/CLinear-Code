@@ -19,7 +19,7 @@ export interface ClaudeTaskResult {
 /**
  * Build the prompt for Claude Code
  */
-function buildPrompt(context: IssueContext): string {
+export function buildPrompt(context: IssueContext): string {
   const { issue, comments, triggerComment, repository } = context;
 
   let prompt = `You are implementing a task from a Linear issue. Here is the full context:
@@ -243,14 +243,19 @@ function runClaudeCode(workDir: string, prompt: string): Promise<string> {
 
     logger.debug('Running claude with args', { args: args.slice(0, -1) }); // Don't log full prompt
 
+    // Build environment - only include ANTHROPIC_API_KEY if explicitly set
+    // Otherwise, Claude CLI will use credentials from `claude login`
+    const claudeEnv: Record<string, string> = {
+      ...process.env as Record<string, string>,
+      CI: 'true', // Disable interactive features
+    };
+    if (config.ANTHROPIC_API_KEY) {
+      claudeEnv.ANTHROPIC_API_KEY = config.ANTHROPIC_API_KEY;
+    }
+
     const proc = spawn('claude', args, {
       cwd: workDir,
-      env: {
-        ...process.env,
-        ANTHROPIC_API_KEY: config.ANTHROPIC_API_KEY,
-        // Disable interactive features
-        CI: 'true',
-      },
+      env: claudeEnv,
       stdio: ['pipe', 'pipe', 'pipe'],
     });
 
@@ -299,7 +304,7 @@ function runClaudeCode(workDir: string, prompt: string): Promise<string> {
 /**
  * Parse Claude's output to extract the result JSON
  */
-function parseClaudeOutput(output: string): ClaudeTaskResult {
+export function parseClaudeOutput(output: string): ClaudeTaskResult {
   // Look for JSON block in the output
   const jsonMatch = output.match(/```json\s*([\s\S]*?)\s*```/);
 

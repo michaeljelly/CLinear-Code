@@ -4,7 +4,7 @@ import { config } from '../config.js';
 import { logger } from '../utils/logger.js';
 import { linearWebhookPayloadSchema, type LinearWebhookPayload, type LinearComment } from './types.js';
 import { linearClient } from './api-client.js';
-import { executeClaudeTask } from '../claude/executor.js';
+import { getComputeProvider } from '../compute/index.js';
 
 /**
  * Verify Linear webhook signature
@@ -141,8 +141,10 @@ async function processClaudeRequest(issueId: string, commentId: string): Promise
     logger.info(`Repository: ${context.repository.url}`);
     logger.info(`Instruction: ${context.triggerComment.instruction}`);
 
-    // Execute Claude Code
-    const result = await executeClaudeTask(context);
+    // Execute Claude Code via compute provider
+    const provider = getComputeProvider();
+    logger.info(`Using compute provider: ${provider.name}`);
+    const result = await provider.executeTask(context);
 
     // Post result comment
     if (result.success && result.prUrl) {

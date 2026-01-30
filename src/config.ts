@@ -18,12 +18,13 @@ const configSchema = z.object({
   GITHUB_DEFAULT_REPO: z.string().optional(),
 
   // Claude configuration
-  ANTHROPIC_API_KEY: z.string().min(1, 'ANTHROPIC_API_KEY is required'),
+  // ANTHROPIC_API_KEY is optional - if not set, Claude CLI will use credentials from `claude login`
+  ANTHROPIC_API_KEY: z.string().optional(),
   CLAUDE_MODEL: z.string().default('claude-sonnet-4-20250514'),
   CLAUDE_MAX_TURNS: z.string().default('200').transform(Number),
 
   // Compute provider
-  COMPUTE_PROVIDER: z.enum(['local', 'fly', 'cloudflare', 'modal']).default('local'),
+  COMPUTE_PROVIDER: z.enum(['local', 'sprites']).default('local'),
   WORK_DIR: z.string().default('/tmp/claude-work'),
 
   // Logging
