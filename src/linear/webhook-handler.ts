@@ -206,7 +206,7 @@ async function processClaudeRequest(issueId: string, commentId: string, requestI
         success: result.success,
         hasPrUrl: !!result.prUrl,
         hasError: !!result.error,
-        summaryLength: result.summary?.length || 0,
+        outputLength: result.output?.length || 0,
       });
     } catch (execError) {
       logger.error(`[${requestId}] Claude Code execution threw an exception`, {
@@ -217,75 +217,35 @@ async function processClaudeRequest(issueId: string, commentId: string, requestI
       throw execError;
     }
 
-    // Post result comment
+    // Post result comment with Claude's full output
     logger.info(`[${requestId}] Posting result comment to Linear...`);
-    if (result.success) {
-      logger.info(`[${requestId}] SUCCESS`, {
-        hasPrUrl: !!result.prUrl,
-        summary: result.summary,
+
+    let comment = '';
+
+    if (result.prUrl) {
+      comment += `**Pull Request:** ${result.prUrl}\n\n`;
+    }
+
+    if (result.output) {
+      comment += result.output;
+    } else if (result.error) {
+      comment += `❌ **Error:** ${result.error}`;
+    }
+
+    // Truncate if too long for Linear (limit ~10k chars to be safe)
+    if (comment.length > 10000) {
+      comment = comment.substring(0, 9900) + '\n\n...(truncated)';
+    }
+
+    comment += `\n\n_Request ID: ${requestId}_`;
+
+    try {
+      await linearClient.addComment(issueId, comment);
+      logger.info(`[${requestId}] Result comment posted`);
+    } catch (commentError) {
+      logger.error(`[${requestId}] Failed to post result comment`, {
+        error: commentError instanceof Error ? commentError.message : commentError,
       });
-
-      let comment = `✅ **Task Complete!**\n\n`;
-
-      if (result.prUrl) {
-        comment += `**Pull Request:** ${result.prUrl}\n\n`;
-      }
-
-      if (result.summary) {
-        comment += `**Summary:**\n${result.summary}\n\n`;
-      }
-
-      if (result.assumptions && result.assumptions.length > 0) {
-        comment += `**Assumptions made:**\n`;
-        result.assumptions.forEach(a => {
-          comment += `- ${a}\n`;
-        });
-        comment += '\n';
-      }
-
-      if (result.questions && result.questions.length > 0) {
-        comment += `**Questions/Clarifications needed:**\n`;
-        result.questions.forEach(q => {
-          comment += `- ${q}\n`;
-        });
-      }
-
-      comment += `\n_Request ID: ${requestId}_`;
-
-      try {
-        await linearClient.addComment(issueId, comment);
-        logger.info(`[${requestId}] Success comment posted`);
-      } catch (commentError) {
-        logger.error(`[${requestId}] Failed to post success comment`, {
-          error: commentError instanceof Error ? commentError.message : commentError,
-        });
-      }
-    } else {
-      logger.warn(`[${requestId}] FAILURE - Task did not succeed`, {
-        error: result.error,
-        summary: result.summary,
-      });
-
-      let comment = `❌ **Task Failed**\n\n`;
-
-      if (result.error) {
-        comment += `**Error:** ${result.error}\n\n`;
-      }
-
-      if (result.summary) {
-        comment += `**What was attempted:**\n${result.summary}\n\n`;
-      }
-
-      comment += `Please review the issue description and try again, or implement manually.\n\n_Request ID: ${requestId}_`;
-
-      try {
-        await linearClient.addComment(issueId, comment);
-        logger.info(`[${requestId}] Failure comment posted`);
-      } catch (commentError) {
-        logger.error(`[${requestId}] Failed to post failure comment`, {
-          error: commentError instanceof Error ? commentError.message : commentError,
-        });
-      }
     }
 
     logger.info(`[${requestId}] ========== REQUEST COMPLETE ==========`);

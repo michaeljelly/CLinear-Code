@@ -19,6 +19,7 @@ export class SpritesComputeProvider implements ComputeProvider {
     if (!repository) {
       return {
         success: false,
+        output: '',
         error: 'No repository configured',
       };
     }
@@ -100,6 +101,7 @@ export class SpritesComputeProvider implements ComputeProvider {
 
       return {
         success: false,
+        output: '',
         error: error instanceof Error ? error.message : 'Unknown error',
       };
     }

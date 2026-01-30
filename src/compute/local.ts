@@ -68,6 +68,7 @@ export class LocalComputeProvider implements ComputeProvider {
       logger.error(`[local] Task ${taskId} error`, { error });
       return {
         success: false,
+        output: '',
         error: error instanceof Error ? error.message : 'Unknown error',
       };
     }
