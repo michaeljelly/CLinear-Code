@@ -18,13 +18,6 @@ export class LocalComputeProvider implements ComputeProvider {
   async executeTask(context: IssueContext): Promise<ClaudeTaskResult> {
     const { repository } = context;
 
-    if (!repository) {
-      return {
-        success: false,
-        error: 'No repository configured',
-      };
-    }
-
     const taskId = uuidv4();
     const workDir = path.join(config.WORK_DIR, taskId);
 
@@ -33,20 +26,26 @@ export class LocalComputeProvider implements ComputeProvider {
     try {
       await fs.mkdir(workDir, { recursive: true });
 
-      // Clone the repository
-      logger.info(`[local] Cloning ${repository.url}`);
-      await this.runCommand('git', ['clone', repository.url, 'repo'], { cwd: workDir });
+      let repoDir = workDir;
 
-      const repoDir = path.join(workDir, 'repo');
+      // Clone the repository if one is configured
+      if (repository) {
+        logger.info(`[local] Cloning ${repository.url}`);
+        await this.runCommand('git', ['clone', repository.url, 'repo'], { cwd: workDir });
 
-      // Configure git
-      await this.runCommand('git', ['config', 'user.email', 'claude@linear-webhook.local'], { cwd: repoDir });
-      await this.runCommand('git', ['config', 'user.name', 'Claude (Linear Webhook)'], { cwd: repoDir });
+        repoDir = path.join(workDir, 'repo');
 
-      // Set up credentials for pushing
-      await this.runCommand('git', ['remote', 'set-url', 'origin',
-        `https://x-access-token:${config.GITHUB_TOKEN}@github.com/${repository.owner}/${repository.name}.git`
-      ], { cwd: repoDir });
+        // Configure git
+        await this.runCommand('git', ['config', 'user.email', 'claude@linear-webhook.local'], { cwd: repoDir });
+        await this.runCommand('git', ['config', 'user.name', 'Claude (Linear Webhook)'], { cwd: repoDir });
+
+        // Set up credentials for pushing
+        await this.runCommand('git', ['remote', 'set-url', 'origin',
+          `https://x-access-token:${config.GITHUB_TOKEN}@github.com/${repository.owner}/${repository.name}.git`
+        ], { cwd: repoDir });
+      } else {
+        logger.info('[local] No repository configured, running in standalone mode');
+      }
 
       const prompt = buildPrompt(context);
       await fs.writeFile(path.join(workDir, 'prompt.txt'), prompt);

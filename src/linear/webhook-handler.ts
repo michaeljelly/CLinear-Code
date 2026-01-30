@@ -57,97 +57,171 @@ export async function handleLinearWebhook(
   req: Request,
   res: Response
 ): Promise<void> {
+  const requestId = `webhook-${Date.now()}-${Math.random().toString(36).substring(7)}`;
+
   try {
+    logger.info(`[${requestId}] ========== WEBHOOK RECEIVED ==========`);
+    logger.info(`[${requestId}] Headers: ${JSON.stringify({
+      'content-type': req.headers['content-type'],
+      'linear-signature': req.headers['linear-signature'] ? '[PRESENT]' : '[MISSING]',
+      'linear-delivery': req.headers['linear-delivery'],
+      'user-agent': req.headers['user-agent'],
+    })}`);
+    logger.debug(`[${requestId}] Raw body: ${JSON.stringify(req.body)}`);
+
     // Parse and validate webhook payload
     const parseResult = linearWebhookPayloadSchema.safeParse(req.body);
     if (!parseResult.success) {
-      logger.error('Invalid webhook payload', { errors: parseResult.error.format() });
+      logger.error(`[${requestId}] Invalid webhook payload`, {
+        errors: parseResult.error.format(),
+        rawBody: req.body,
+      });
       res.status(400).json({ error: 'Invalid payload' });
       return;
     }
 
     const payload = parseResult.data;
-    logger.info(`Received webhook: ${payload.type} ${payload.action}`);
+    logger.info(`[${requestId}] Parsed webhook: type=${payload.type} action=${payload.action}`);
+    logger.debug(`[${requestId}] Payload data: ${JSON.stringify(payload.data)}`);
 
     // We only care about new comments that mention @Claude
     if (payload.type !== 'Comment' || payload.action !== 'create') {
-      logger.debug(`Ignoring ${payload.type} ${payload.action} event`);
+      logger.info(`[${requestId}] Ignoring ${payload.type} ${payload.action} event (not a comment creation)`);
       res.status(200).json({ status: 'ignored', reason: 'Not a comment creation' });
       return;
     }
 
     const comment = payload.data as LinearComment;
+    logger.info(`[${requestId}] Comment received: id=${comment.id}, body="${comment.body.substring(0, 100)}..."`);
 
     // Check if the comment mentions @Claude
     if (!mentionsClaude(comment.body)) {
-      logger.debug('Comment does not mention @Claude');
+      logger.info(`[${requestId}] Comment does not mention @Claude, ignoring`);
       res.status(200).json({ status: 'ignored', reason: 'No @Claude mention' });
       return;
     }
 
-    logger.info(`Found @Claude mention in comment ${comment.id}`);
+    logger.info(`[${requestId}] *** Found @Claude mention in comment ${comment.id} ***`);
 
     // Get the issue ID from the comment
     const issueId = comment.issueId || comment.issue?.id;
     if (!issueId) {
-      logger.error('Comment has no associated issue');
+      logger.error(`[${requestId}] Comment has no associated issue`, { comment });
       res.status(400).json({ error: 'No issue ID found' });
       return;
     }
 
+    logger.info(`[${requestId}] Associated issue ID: ${issueId}`);
+
     // Respond immediately to avoid webhook timeout
+    logger.info(`[${requestId}] Sending 202 Accepted response, will process async`);
     res.status(202).json({
       status: 'accepted',
       message: 'Processing @Claude request',
       commentId: comment.id,
       issueId,
+      requestId,
     });
 
     // Process the request asynchronously
-    processClaudeRequest(issueId, comment.id).catch((error) => {
-      logger.error('Failed to process Claude request', { error: error.message });
+    logger.info(`[${requestId}] Starting async processing of Claude request`);
+    processClaudeRequest(issueId, comment.id, requestId).catch((error) => {
+      logger.error(`[${requestId}] Failed to process Claude request (unhandled)`, {
+        error: error instanceof Error ? error.message : error,
+        stack: error instanceof Error ? error.stack : undefined,
+      });
     });
 
   } catch (error) {
-    logger.error('Webhook handler error', { error });
-    res.status(500).json({ error: 'Internal server error' });
+    logger.error(`[${requestId}] Webhook handler error (outer catch)`, {
+      error: error instanceof Error ? error.message : error,
+      stack: error instanceof Error ? error.stack : undefined,
+    });
+    res.status(500).json({ error: 'Internal server error', requestId });
   }
 }
 
 /**
  * Process a @Claude request asynchronously
  */
-async function processClaudeRequest(issueId: string, commentId: string): Promise<void> {
-  logger.info(`Processing Claude request for issue ${issueId}`);
+async function processClaudeRequest(issueId: string, commentId: string, requestId: string): Promise<void> {
+  logger.info(`[${requestId}] ========== PROCESSING CLAUDE REQUEST ==========`);
+  logger.info(`[${requestId}] Issue ID: ${issueId}, Comment ID: ${commentId}`);
 
   try {
     // Post acknowledgment comment
-    await linearClient.addComment(
-      issueId,
-      `🤖 **Claude is on it!**\n\nI'm analyzing this issue and will implement the requested changes. I'll update this thread with a PR link once complete.`
-    );
-
-    // Fetch full issue context
-    const context = await linearClient.getIssueContext(issueId, commentId);
-
-    if (!context.repository) {
+    logger.info(`[${requestId}] Posting acknowledgment comment to Linear...`);
+    try {
       await linearClient.addComment(
         issueId,
-        `❌ **Could not determine repository**\n\nPlease add a GitHub repository URL to the issue description, or add a label in the format \`repo:owner/name\`, or configure a default repository.`
+        `🤖 **Claude is on it!**\n\nI'm analyzing this issue and will implement the requested changes. I'll update this thread with a PR link once complete.\n\n_Request ID: ${requestId}_`
       );
-      return;
+      logger.info(`[${requestId}] Acknowledgment comment posted successfully`);
+    } catch (ackError) {
+      logger.error(`[${requestId}] Failed to post acknowledgment comment`, {
+        error: ackError instanceof Error ? ackError.message : ackError,
+        stack: ackError instanceof Error ? ackError.stack : undefined,
+      });
+      // Continue anyway - the main task might still work
     }
 
-    logger.info(`Repository: ${context.repository.url}`);
-    logger.info(`Instruction: ${context.triggerComment.instruction}`);
+    // Fetch full issue context
+    logger.info(`[${requestId}] Fetching issue context from Linear...`);
+    let context;
+    try {
+      context = await linearClient.getIssueContext(issueId, commentId);
+      logger.info(`[${requestId}] Issue context fetched successfully`, {
+        issueIdentifier: context.issue.identifier,
+        issueTitle: context.issue.title,
+        hasRepository: !!context.repository,
+        repositoryUrl: context.repository?.url,
+        instructionLength: context.triggerComment.instruction.length,
+      });
+    } catch (contextError) {
+      logger.error(`[${requestId}] Failed to fetch issue context`, {
+        error: contextError instanceof Error ? contextError.message : contextError,
+        stack: contextError instanceof Error ? contextError.stack : undefined,
+      });
+      throw contextError;
+    }
+
+    if (context.repository) {
+      logger.info(`[${requestId}] Repository: ${context.repository.url} (${context.repository.owner}/${context.repository.name})`);
+    } else {
+      logger.warn(`[${requestId}] No repository configured, running in standalone mode`);
+    }
+    logger.info(`[${requestId}] Instruction: "${context.triggerComment.instruction.substring(0, 200)}..."`);
 
     // Execute Claude Code via compute provider
     const provider = getComputeProvider();
-    logger.info(`Using compute provider: ${provider.name}`);
-    const result = await provider.executeTask(context);
+    logger.info(`[${requestId}] Using compute provider: ${provider.name}`);
+    logger.info(`[${requestId}] Starting Claude Code execution...`);
+
+    const startTime = Date.now();
+    let result;
+    try {
+      result = await provider.executeTask(context);
+      const duration = ((Date.now() - startTime) / 1000).toFixed(1);
+      logger.info(`[${requestId}] Claude Code execution completed in ${duration}s`, {
+        success: result.success,
+        hasPrUrl: !!result.prUrl,
+        hasError: !!result.error,
+        summaryLength: result.summary?.length || 0,
+      });
+    } catch (execError) {
+      logger.error(`[${requestId}] Claude Code execution threw an exception`, {
+        error: execError instanceof Error ? execError.message : execError,
+        stack: execError instanceof Error ? execError.stack : undefined,
+        duration: ((Date.now() - startTime) / 1000).toFixed(1) + 's',
+      });
+      throw execError;
+    }
 
     // Post result comment
+    logger.info(`[${requestId}] Posting result comment to Linear...`);
     if (result.success && result.prUrl) {
+      logger.info(`[${requestId}] SUCCESS - PR created: ${result.prUrl}`);
+
       let comment = `✅ **Implementation Complete!**\n\n`;
       comment += `**Pull Request:** ${result.prUrl}\n\n`;
 
@@ -170,8 +244,22 @@ async function processClaudeRequest(issueId: string, commentId: string): Promise
         });
       }
 
-      await linearClient.addComment(issueId, comment);
+      comment += `\n_Request ID: ${requestId}_`;
+
+      try {
+        await linearClient.addComment(issueId, comment);
+        logger.info(`[${requestId}] Success comment posted`);
+      } catch (commentError) {
+        logger.error(`[${requestId}] Failed to post success comment`, {
+          error: commentError instanceof Error ? commentError.message : commentError,
+        });
+      }
     } else {
+      logger.warn(`[${requestId}] FAILURE - Task did not succeed`, {
+        error: result.error,
+        summary: result.summary,
+      });
+
       let comment = `❌ **Implementation Failed**\n\n`;
 
       if (result.error) {
@@ -182,21 +270,36 @@ async function processClaudeRequest(issueId: string, commentId: string): Promise
         comment += `**What was attempted:**\n${result.summary}\n\n`;
       }
 
-      comment += `Please review the issue description and try again, or implement manually.`;
+      comment += `Please review the issue description and try again, or implement manually.\n\n_Request ID: ${requestId}_`;
 
-      await linearClient.addComment(issueId, comment);
+      try {
+        await linearClient.addComment(issueId, comment);
+        logger.info(`[${requestId}] Failure comment posted`);
+      } catch (commentError) {
+        logger.error(`[${requestId}] Failed to post failure comment`, {
+          error: commentError instanceof Error ? commentError.message : commentError,
+        });
+      }
     }
 
+    logger.info(`[${requestId}] ========== REQUEST COMPLETE ==========`);
+
   } catch (error) {
-    logger.error('Error processing Claude request', { error });
+    logger.error(`[${requestId}] ========== UNEXPECTED ERROR ==========`, {
+      error: error instanceof Error ? error.message : error,
+      stack: error instanceof Error ? error.stack : undefined,
+    });
 
     try {
       await linearClient.addComment(
         issueId,
-        `❌ **Unexpected Error**\n\nAn error occurred while processing this request:\n\`\`\`\n${error instanceof Error ? error.message : 'Unknown error'}\n\`\`\`\n\nPlease check the server logs for more details.`
+        `❌ **Unexpected Error**\n\nAn error occurred while processing this request:\n\`\`\`\n${error instanceof Error ? error.message : 'Unknown error'}\n\`\`\`\n\nPlease check the server logs for more details.\n\n_Request ID: ${requestId}_`
       );
+      logger.info(`[${requestId}] Error comment posted to Linear`);
     } catch (commentError) {
-      logger.error('Failed to post error comment', { error: commentError });
+      logger.error(`[${requestId}] Failed to post error comment`, {
+        error: commentError instanceof Error ? commentError.message : commentError,
+      });
     }
   }
 }
