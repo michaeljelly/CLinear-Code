@@ -22,89 +22,55 @@ export interface ClaudeTaskResult {
 export function buildPrompt(context: IssueContext): string {
   const { issue, comments, triggerComment, repository } = context;
 
-  let prompt = `You are implementing a task from a Linear issue. Here is the full context:
+  const branchName = issue.branchName || `${issue.teamKey?.toLowerCase() || 'feature'}/${issue.identifier.toLowerCase()}`;
 
-## Issue: ${issue.identifier} - ${issue.title}
+  let prompt = `# Task from Linear: ${issue.identifier}
 
-**URL:** ${issue.url}
-**State:** ${issue.state || 'Unknown'}
-**Priority:** ${issue.priority || 'None'}
-**Labels:** ${issue.labels.join(', ') || 'None'}
+**${issue.title}**
 
-### Description:
-${issue.description || 'No description provided.'}
+${issue.description || '(No description)'}
 
-### Comments History:
+## Request
+${triggerComment.instruction}
+
 `;
 
-  comments.forEach((comment, index) => {
-    const marker = comment.isTrigger ? ' [TRIGGER - This is the request to implement]' : '';
-    prompt += `
-**Comment ${index + 1}** by ${comment.author} (${comment.createdAt})${marker}:
-${comment.body}
+  // Add recent comments for context (skip auto-generated ones)
+  const relevantComments = comments.filter(c => !c.body.includes('Claude is on it'));
+  if (relevantComments.length > 0) {
+    prompt += `## Comments\n`;
+    relevantComments.slice(-3).forEach(c => {
+      prompt += `- ${c.author}: ${c.body.substring(0, 200)}${c.body.length > 200 ? '...' : ''}\n`;
+    });
+    prompt += '\n';
+  }
+
+  // Different instructions based on whether we have a repo
+  if (repository) {
+    prompt += `## Instructions
+This is a coding task. You're in a git repo (${repository.owner}/${repository.name}).
+
+1. Create branch: \`${branchName}\`
+2. Make the changes requested
+3. Commit, push, and create a PR titled "[${issue.identifier}] ${issue.title}"
+4. Output result as JSON (see below)
 `;
-  });
+  } else {
+    prompt += `## Instructions
+Complete the task requested above. When done, output result as JSON (see below).
+`;
+  }
 
   prompt += `
-
-## Your Task
-
-The user has requested implementation via this comment:
-
-> ${triggerComment.body}
-
-**Extracted instruction:** ${triggerComment.instruction}
-
-## Repository
-
-You will be working in: ${repository?.url}
-
-## Instructions
-
-1. **Understand the request**: Carefully read the issue description and all comments to understand what needs to be implemented.
-
-2. **Create a new branch**: Create a branch named \`${issue.branchName || `${issue.teamKey?.toLowerCase() || 'feature'}/${issue.identifier.toLowerCase()}`}\` (or a similar descriptive name).
-
-3. **Implement the changes**: Make all necessary code changes to fulfill the request.
-
-4. **Test your changes**: If tests exist, run them to ensure nothing is broken.
-
-5. **Create a Pull Request**: Push your branch and create a PR with:
-   - A clear title referencing the Linear issue (e.g., "[${issue.identifier}] ${issue.title}")
-   - A description that explains what was changed and why
-   - Link to the Linear issue
-
-6. **Document your work**: At the end, output a JSON block with the following structure:
-
+## Output Format
+When finished, output exactly:
 \`\`\`json
-{
-  "success": true,
-  "branch": "the-branch-name",
-  "prUrl": "https://github.com/owner/repo/pull/123",
-  "summary": "Brief description of what was implemented",
-  "assumptions": ["Any assumptions you made"],
-  "questions": ["Any questions or clarifications needed"]
-}
+{"success": true, "summary": "what you did"${repository ? ', "prUrl": "https://..."' : ''}}
 \`\`\`
-
-If you encounter errors or cannot complete the task, output:
-
+Or on failure:
 \`\`\`json
-{
-  "success": false,
-  "error": "Description of what went wrong",
-  "summary": "What was attempted before failure"
-}
+{"success": false, "error": "what went wrong"}
 \`\`\`
-
-## Important Notes
-
-- Make minimal, focused changes - don't refactor unrelated code
-- Follow existing code style and patterns
-- If something is unclear, make a reasonable assumption and document it
-- If you truly cannot proceed, explain why clearly
-
-Begin implementation now.
 `;
 
   return prompt;

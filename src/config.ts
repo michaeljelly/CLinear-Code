@@ -25,7 +25,7 @@ const configSchema = z.object({
 
   // Compute provider
   COMPUTE_PROVIDER: z.enum(['local', 'sprites']).default('local'),
-  WORK_DIR: z.string().default('/tmp/claude-work'),
+  WORK_DIR: z.string().default('/home/sprite/claude-work'),
 
   // Logging
   LOG_LEVEL: z.enum(['error', 'warn', 'info', 'debug']).default('info'),
